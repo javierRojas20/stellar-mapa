@@ -94,3 +94,6 @@ const RentDetailsModal = ({ rent, isOpen, onClose, loading = false }) => {
 };
 
 export default RentDetailsModal;
+
+
+

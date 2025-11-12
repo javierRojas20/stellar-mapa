@@ -1,0 +1,65 @@
+#!/usr/bin/expect -f
+
+set timeout 120
+set server_ip "134.209.216.156"
+set server_pass "17&\\WW#qO53Z"
+
+# Subir index.html
+spawn scp -o StrictHostKeyChecking=no dist/index.html root@${server_ip}:/var/www/html/index.html
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+        exp_continue
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}
+
+wait
+
+# Subir archivos de assets
+spawn scp -r -o StrictHostKeyChecking=no dist/assets root@${server_ip}:/var/www/html/
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+        exp_continue
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}
+
+wait
+
+# Ajustar permisos
+spawn ssh -o StrictHostKeyChecking=no root@${server_ip}
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+}
+
+expect "# "
+
+send "chown -R www-data:www-data /var/www/html\r"
+expect "# "
+send "chmod -R 755 /var/www/html\r"
+expect "# "
+send "echo 'Files updated successfully'\r"
+expect "# "
+
+send "exit\r"
+expect eof
+

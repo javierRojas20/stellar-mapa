@@ -48,3 +48,4 @@ const PublixDetailsModal = ({ publix, isOpen, onClose, loading = false }) => {
 };
 
 export default PublixDetailsModal;
+

@@ -1,0 +1,48 @@
+#!/usr/bin/expect -f
+
+set timeout 30
+set server_ip "134.209.216.156"
+set server_user "root"
+set server_pass "17&\\WW#qO53Z"
+
+spawn ssh -o StrictHostKeyChecking=no root@${server_ip}
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+}
+
+expect "# "
+
+# Verificar archivos en /var/www/html
+send "ls -la /var/www/html/\r"
+expect "# "
+
+# Verificar que index.html existe
+send "test -f /var/www/html/index.html && echo '✓ index.html encontrado' || echo '✗ index.html NO encontrado'\r"
+expect "# "
+
+# Verificar que el directorio assets existe
+send "test -d /var/www/html/assets && echo '✓ assets/ encontrado' || echo '✗ assets/ NO encontrado'\r"
+expect "# "
+
+# Verificar configuración de Nginx
+send "cat /etc/nginx/sites-enabled/map.livestellar.com | grep -A 2 'server_name'\r"
+expect "# "
+
+# Probar conexión HTTP
+send "curl -I http://localhost 2>&1 | head -5\r"
+expect "# "
+
+# Probar conexión HTTPS
+send "curl -I https://localhost 2>&1 | head -5\r"
+expect "# "
+
+send "exit\r"
+expect eof
+

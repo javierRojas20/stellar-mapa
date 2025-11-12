@@ -1,0 +1,123 @@
+#!/usr/bin/expect -f
+
+set timeout 300
+set server_ip "134.209.216.156"
+set server_user "root"
+set server_pass "17&\\WW#qO53Z"
+
+spawn ssh -o StrictHostKeyChecking=no root@${server_ip}
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+}
+
+expect "# "
+
+# 1. Eliminar enlace roto
+send "rm -f /etc/nginx/sites-enabled/tudominio.com\r"
+expect "# "
+
+# 2. Crear configuración correcta para map.livestellar.com
+send "cat > /etc/nginx/sites-available/map.livestellar.com << 'NGINXEOF'\r"
+expect "> "
+send "server {\r"
+expect "> "
+send "    listen 80;\r"
+expect "> "
+send "    server_name map.livestellar.com;\r"
+expect "> "
+send "\r"
+expect "> "
+send "    root /var/www/html;\r"
+expect "> "
+send "    index index.html;\r"
+expect "> "
+send "\r"
+expect "> "
+send "    location / {\r"
+expect "> "
+send "        try_files \$uri \$uri/ /index.html;\r"
+expect "> "
+send "    }\r"
+expect "> "
+send "\r"
+expect "> "
+send "    location /assets/ {\r"
+expect "> "
+send "        expires 1y;\r"
+expect "> "
+send "        add_header Cache-Control \"public, immutable\";\r"
+expect "> "
+send "    }\r"
+expect "> "
+send "\r"
+expect "> "
+send "    gzip on;\r"
+expect "> "
+send "    gzip_vary on;\r"
+expect "> "
+send "    gzip_min_length 1024;\r"
+expect "> "
+send "    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;\r"
+expect "> "
+send "}\r"
+expect "> "
+send "NGINXEOF\r"
+expect "# "
+
+# 3. Habilitar el sitio
+send "rm -f /etc/nginx/sites-enabled/map.livestellar.com\r"
+expect "# "
+send "ln -s /etc/nginx/sites-available/map.livestellar.com /etc/nginx/sites-enabled/\r"
+expect "# "
+
+# 4. Verificar configuración
+send "nginx -t\r"
+expect "# "
+
+# 5. Iniciar Nginx
+send "systemctl start nginx\r"
+expect "# "
+
+# 6. Verificar estado
+send "systemctl status nginx --no-pager | head -10\r"
+expect "# "
+
+# 7. Instalar Certbot si no está instalado
+send "which certbot || apt install certbot python3-certbot-nginx -y\r"
+expect "# "
+
+# 8. Configurar firewall
+send "ufw allow 80/tcp 2>/dev/null; ufw allow 443/tcp 2>/dev/null; echo 'Firewall configurado'\r"
+expect "# "
+
+# 9. Obtener certificado SSL
+send "certbot --nginx -d map.livestellar.com --non-interactive --agree-tos --email admin@livestellar.com --redirect\r"
+expect {
+    "Congratulations" {
+        puts "\n✓ SSL configurado exitosamente!"
+    }
+    "Error" {
+        puts "\n⚠ Hubo un error con el certificado SSL"
+    }
+    timeout {
+        puts "\n⚠ El proceso de certificado puede estar demorando..."
+    }
+}
+expect "# "
+
+# 10. Verificar estado final
+send "systemctl status nginx --no-pager | head -5\r"
+expect "# "
+send "certbot certificates\r"
+expect "# "
+
+send "exit\r"
+expect eof
+

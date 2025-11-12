@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import * as turf from '@turf/turf';
 
-const MapboxMap = ({ 
+const MapboxMap = forwardRef(({ 
   showRadiusAnalysis, 
   radiusMiles, 
   onMarkerClick, 
@@ -12,13 +12,36 @@ const MapboxMap = ({
   radiusValue,
   categoryData,
   layers,
-  categories
-}) => {
+  categories,
+  pipelineData = [],
+  isPipelineActive = false,
+  priceHeatmapData = null,
+  showPriceHeatmap = false,
+  countHeatmapData = null,
+  showCountHeatmap = false,
+  showWetlands = false,
+  onBoundsChange = null
+}, ref) => {
   const [mapLoaded, setMapLoaded] = useState(false);
   const mapContainer = useRef(null);
   const map = useRef(null);
   const initialized = useRef(false);
   const [activeLayers, setActiveLayers] = useState({});
+
+  // Exponer métodos del mapa a través del ref
+  useImperativeHandle(ref, () => ({
+    flyTo: (options) => {
+      if (map.current) {
+        map.current.flyTo(options);
+      }
+    },
+    fitBounds: (bounds, options) => {
+      if (map.current) {
+        map.current.fitBounds(bounds, options);
+      }
+    },
+    getMap: () => map.current
+  }), []);
 
   // Manejar datos de categorías cuando cambien
   useEffect(() => {
@@ -87,6 +110,230 @@ const MapboxMap = ({
 
     setActiveLayers({ ...layers });
   }, [layers, categoryData, categories, mapLoaded]);
+
+  // Manejar markers de stellar_pipeline
+  useEffect(() => {
+    console.log('🔄 Pipeline markers effect triggered:', {
+      mapExists: !!map.current,
+      mapLoaded,
+      isPipelineActive,
+      pipelineDataLength: pipelineData?.length || 0,
+      pipelineData: pipelineData
+    });
+
+    if (!map.current || !mapLoaded) {
+      console.log('⏸️ Skipping pipeline markers - map not ready');
+      return;
+    }
+
+    const layerId = 'stellar-pipeline';
+
+    // Limpiar capa de pipeline si existe
+    console.log('🧹 Cleaning up existing pipeline layers...');
+    if (map.current.getLayer(`${layerId}-clusters-count`)) {
+      map.current.removeLayer(`${layerId}-clusters-count`);
+    }
+    if (map.current.getLayer(`${layerId}-clusters`)) {
+      map.current.removeLayer(`${layerId}-clusters`);
+    }
+    if (map.current.getLayer(`${layerId}-unclustered-point`)) {
+      map.current.removeLayer(`${layerId}-unclustered-point`);
+    }
+    if (map.current.getLayer(`${layerId}-unclustered-point-text`)) {
+      map.current.removeLayer(`${layerId}-unclustered-point-text`);
+    }
+    if (map.current.getSource(`${layerId}-data`)) {
+      map.current.removeSource(`${layerId}-data`);
+    }
+
+    // Agregar markers si el pipeline está activo y hay datos
+    if (isPipelineActive && pipelineData && pipelineData.length > 0) {
+      console.log(`📍 Adding stellar_pipeline layer with ${pipelineData.length} items`);
+      console.log('📊 Pipeline data sample:', pipelineData.slice(0, 3));
+      addPipelineLayer(pipelineData);
+    } else {
+      console.log('⚠️ Not adding pipeline layer:', {
+        isPipelineActive,
+        hasData: !!(pipelineData && pipelineData.length > 0),
+        dataLength: pipelineData?.length || 0
+      });
+    }
+  }, [isPipelineActive, pipelineData, mapLoaded]);
+
+  // Función para agregar capa de stellar_pipeline
+  const addPipelineLayer = (data) => {
+    if (!map.current) {
+      console.error('❌ Cannot add pipeline layer - map not initialized');
+      return;
+    }
+
+    console.log('🎨 Starting to add pipeline layer with', data.length, 'items');
+
+    const layerId = 'stellar-pipeline';
+    const color = '#FF6B35'; // Color naranja para stellar_pipeline
+
+    // Convertir datos a GeoJSON
+    const geojson = {
+      type: 'FeatureCollection',
+      features: data.map((item, index) => {
+        // Obtener coordenadas de diferentes formatos posibles
+        const lng = item.longitude || item.lng || item.lon || item.long || item.x || item.x_coord || item.coord_x;
+        const lat = item.latitude || item.lat || item.latitud || item.y || item.y_coord || item.coord_y;
+        
+        if (!lng || !lat) {
+          console.warn(`⚠️ Item ${index} missing coordinates:`, {
+            id: item.id,
+            keys: Object.keys(item),
+            hasLng: !!lng,
+            hasLat: !!lat
+          });
+        }
+
+        const coordinates = [lng || -80.1918, lat || 25.7617];
+
+        return {
+          type: 'Feature',
+          properties: {
+            id: item.id,
+            name: item.name || item.title || 'Pipeline Item',
+            status: item.status,
+            product: item.product,
+            units: item.units,
+            ...item
+          },
+          geometry: {
+            type: 'Point',
+            coordinates: coordinates
+          }
+        };
+      }).filter(feature => {
+        // Filtrar features con coordenadas válidas
+        const coords = feature.geometry.coordinates;
+        return coords[0] && coords[1] && 
+               coords[0] !== -80.1918 && coords[1] !== 25.7617; // Evitar coordenadas por defecto
+      })
+    };
+
+    console.log('✅ GeoJSON created with', geojson.features.length, 'features');
+    console.log('📍 Sample feature:', geojson.features[0]);
+
+    // Agregar fuente de datos con clustering
+    try {
+      map.current.addSource(`${layerId}-data`, {
+        type: 'geojson',
+        data: geojson,
+        cluster: true,
+        clusterMaxZoom: 14,
+        clusterRadius: 50
+      });
+      console.log('✅ Source added successfully');
+    } catch (error) {
+      console.error('❌ Error adding source:', error);
+      return;
+    }
+
+    // Capa de clusters
+    map.current.addLayer({
+      id: `${layerId}-clusters`,
+      type: 'circle',
+      source: `${layerId}-data`,
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-color': color,
+        'circle-radius': [
+          'step',
+          ['get', 'point_count'],
+          20,
+          100,
+          30,
+          750,
+          40
+        ]
+      }
+    });
+
+    // Capa de puntos individuales
+    map.current.addLayer({
+      id: `${layerId}-unclustered-point`,
+      type: 'circle',
+      source: `${layerId}-data`,
+      filter: ['!', ['has', 'point_count']],
+      paint: {
+        'circle-color': color,
+        'circle-radius': 8,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#fff'
+      }
+    });
+
+    // Texto en clusters
+    map.current.addLayer({
+      id: `${layerId}-clusters-count`,
+      type: 'symbol',
+      source: `${layerId}-data`,
+      filter: ['has', 'point_count'],
+      layout: {
+        'text-field': '{point_count_abbreviated}',
+        'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+        'text-size': 12
+      },
+      paint: {
+        'text-color': '#fff'
+      }
+    });
+
+    // Eventos de click en clusters
+    map.current.on('click', `${layerId}-clusters`, (e) => {
+      const features = map.current.queryRenderedFeatures(e.point, {
+        layers: [`${layerId}-clusters`]
+      });
+      const clusterId = features[0].properties.cluster_id;
+      
+      map.current.getSource(`${layerId}-data`).getClusterExpansionZoom(
+        clusterId,
+        (err, zoom) => {
+          if (err) return;
+          
+          map.current.easeTo({
+            center: features[0].geometry.coordinates,
+            zoom: zoom
+          });
+        }
+      );
+    });
+
+    // Eventos de click en puntos individuales
+    map.current.on('click', `${layerId}-unclustered-point`, (e) => {
+      const features = map.current.queryRenderedFeatures(e.point, {
+        layers: [`${layerId}-unclustered-point`]
+      });
+      
+      if (features.length > 0 && onMarkerClick) {
+        const feature = features[0];
+        console.log(`🖱️ Pipeline marker clicked:`, feature.properties);
+        onMarkerClick({
+          category: 'stellar_pipeline',
+          categoryId: 'stellar-pipeline',
+          ...feature.properties
+        });
+      }
+    });
+
+    // Cambiar cursor al hacer hover
+    map.current.on('mouseenter', `${layerId}-clusters`, () => {
+      map.current.getCanvas().style.cursor = 'pointer';
+    });
+    map.current.on('mouseleave', `${layerId}-clusters`, () => {
+      map.current.getCanvas().style.cursor = '';
+    });
+
+    map.current.on('mouseenter', `${layerId}-unclustered-point`, () => {
+      map.current.getCanvas().style.cursor = 'pointer';
+    });
+    map.current.on('mouseleave', `${layerId}-unclustered-point`, () => {
+      map.current.getCanvas().style.cursor = '';
+    });
+  };
 
   // Función para agregar una capa de categoría al mapa
   const addCategoryLayer = (category, data) => {
@@ -281,6 +528,59 @@ const MapboxMap = ({
         
         // Agregar controles de navegación
         map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+        // Función para actualizar bounds con debounce y validación de zoom
+        let boundsTimeout = null;
+        const updateBounds = () => {
+          if (onBoundsChange && map.current) {
+            // Validar que el zoom sea suficiente (mínimo nivel 10 para heatmap)
+            const currentZoom = map.current.getZoom();
+            if (currentZoom < 10) {
+              // No enviar bounds si el zoom es muy bajo
+              return;
+            }
+            
+            // Cancelar timeout anterior si existe
+            if (boundsTimeout) {
+              clearTimeout(boundsTimeout);
+            }
+            
+            // Agregar pequeño delay para evitar demasiadas llamadas
+            boundsTimeout = setTimeout(() => {
+              const bounds = map.current.getBounds();
+              const lngDiff = bounds.getEast() - bounds.getWest();
+              const latDiff = bounds.getNorth() - bounds.getSouth();
+              
+              // Validar que el área no sea demasiado grande
+              if (lngDiff > 2.0 || latDiff > 2.0) {
+                // No enviar bounds si el área es demasiado grande
+                return;
+              }
+              
+              onBoundsChange({
+                min_lng: bounds.getWest(),
+                min_lat: bounds.getSouth(),
+                max_lng: bounds.getEast(),
+                max_lat: bounds.getNorth()
+              });
+            }, 300); // 300ms de delay
+          }
+        };
+
+        // Enviar bounds iniciales inmediatamente
+        if (onBoundsChange && map.current) {
+          const bounds = map.current.getBounds();
+          onBoundsChange({
+            min_lng: bounds.getWest(),
+            min_lat: bounds.getSouth(),
+            max_lng: bounds.getEast(),
+            max_lat: bounds.getNorth()
+          });
+        }
+
+        // Actualizar bounds cuando el mapa se mueve o hace zoom
+        map.current.on('moveend', updateBounds);
+        map.current.on('zoomend', updateBounds);
 
         // Arrays de datos para cada categoría de pipelines
         const pipelineData = {
@@ -844,10 +1144,56 @@ const MapboxMap = ({
         console.log('🎯 Markers and controls added');
       });
 
-      // Evento de error
+      // Evento de error - filtrar errores de tiles individuales que son normales
       map.current.on('error', (e) => {
-        console.error('❌ Mapbox error:', e);
-        setMapLoaded(false);
+        // Filtrar errores de tiles individuales que son esperados (404, CORS, etc.)
+        // Estos errores son normales cuando algunos tiles no existen o no se pueden cargar
+        
+        // Si el error tiene un tile asociado, es un error de tile individual (normal)
+        if (e.tile) {
+          // Estos son errores normales de tiles que no existen o no se pueden cargar
+          // No los mostramos en la consola para evitar ruido
+          return;
+        }
+        
+        // Filtrar errores relacionados con tiles por el mensaje
+        if (e.error && e.error.message) {
+          const errorMsg = e.error.message.toLowerCase();
+          // Ignorar errores comunes de tiles que no existen o no se pueden cargar
+          if (errorMsg.includes('tile') || 
+              errorMsg.includes('404') || 
+              errorMsg.includes('failed to fetch') ||
+              errorMsg.includes('network') ||
+              errorMsg.includes('timeout')) {
+            // Estos errores son normales para tiles que no existen en ciertos niveles de zoom
+            return;
+          }
+        }
+        
+        // Solo mostrar errores críticos que no son de tiles
+        // Estos son errores que realmente afectan la funcionalidad
+        if (e.error && e.error.message) {
+          const errorMsg = e.error.message.toLowerCase();
+          // Solo mostrar errores que no son relacionados con tiles
+          if (!errorMsg.includes('tile') && 
+              !errorMsg.includes('404') && 
+              !errorMsg.includes('failed to fetch') &&
+              !errorMsg.includes('network') &&
+              !errorMsg.includes('timeout')) {
+            console.error('❌ Mapbox critical error:', e.error.message);
+          }
+        }
+        
+        // No cambiar el estado de carga por errores de tiles individuales
+        // Solo cambiar el estado si es un error crítico
+        if (!e.tile && e.error && e.error.message) {
+          const errorMsg = e.error.message.toLowerCase();
+          if (!errorMsg.includes('tile') && 
+              !errorMsg.includes('404') && 
+              !errorMsg.includes('failed to fetch')) {
+            setMapLoaded(false);
+          }
+        }
       });
 
       // Evento de estilo cargado
@@ -1055,6 +1401,748 @@ const MapboxMap = ({
 
   }, [showRadiusAnalysis, radiusMiles]);
 
+  // Manejar Price Heatmap
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const layerId = 'price-heatmap';
+
+    // Limpiar eventos de click y hover antes de remover la capa
+    try {
+      map.current.off('click', layerId);
+      map.current.off('mouseenter', layerId);
+      map.current.off('mouseleave', layerId);
+    } catch (e) {
+      // Ignorar errores si la capa no existe
+    }
+
+    // Limpiar capa de heatmap si existe
+    if (map.current.getLayer(layerId)) {
+      map.current.removeLayer(layerId);
+    }
+    if (map.current.getSource(`${layerId}-data`)) {
+      map.current.removeSource(`${layerId}-data`);
+    }
+
+    // Agregar heatmap si está activo y hay datos
+    if (showPriceHeatmap && priceHeatmapData) {
+      console.log('📍 Adding price heatmap layer');
+      addPriceHeatmapLayer(priceHeatmapData);
+    }
+  }, [showPriceHeatmap, priceHeatmapData, mapLoaded]);
+
+  // Manejar Count Heatmap
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const layerId = 'count-heatmap';
+
+    // Limpiar eventos de click y hover antes de remover la capa
+    try {
+      map.current.off('click', layerId);
+      map.current.off('mouseenter', layerId);
+      map.current.off('mouseleave', layerId);
+    } catch (e) {
+      // Ignorar errores si la capa no existe
+    }
+
+    // Limpiar capa de heatmap si existe
+    if (map.current.getLayer(layerId)) {
+      map.current.removeLayer(layerId);
+    }
+    if (map.current.getSource(`${layerId}-data`)) {
+      map.current.removeSource(`${layerId}-data`);
+    }
+
+    // Agregar heatmap si está activo y hay datos
+    if (showCountHeatmap && countHeatmapData) {
+      console.log('📍 Adding count heatmap layer');
+      addCountHeatmapLayer(countHeatmapData);
+    }
+  }, [showCountHeatmap, countHeatmapData, mapLoaded]);
+
+  // Manejar Wetlands Tiles
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    // Usar HTTPS en producción, HTTP solo en desarrollo local
+    // Si la página está en HTTPS, debemos usar HTTPS para evitar Mixed Content errors
+    const TILE_SERVER_URL = 'https://back.livestellar.com'
+    
+    console.log('💧 Tile server URL:', TILE_SERVER_URL, 'Page protocol:', window.location.protocol);
+    
+    const sourceId = 'wetlands-tiles';
+    const fillLayerId = 'wetlands-fill';
+    const outlineLayerId = 'wetlands-outline';
+
+    // Remover layers si existen
+    if (map.current.getLayer(fillLayerId)) {
+      map.current.removeLayer(fillLayerId);
+    }
+    if (map.current.getLayer(outlineLayerId)) {
+      map.current.removeLayer(outlineLayerId);
+    }
+    // Remover source si existe
+    if (map.current.getSource(sourceId)) {
+      map.current.removeSource(sourceId);
+    }
+
+    // Agregar source y layers si está activo
+    if (showWetlands) {
+      console.log('💧 Adding wetlands tiles layer');
+      
+      try {
+        // Agregar source de tiles
+        const tilesUrl = `${TILE_SERVER_URL}/tiles/wetlands/{z}/{x}/{y}.pbf`;
+        console.log('💧 Adding wetlands source with URL:', tilesUrl);
+        
+        map.current.addSource(sourceId, {
+          type: 'vector',
+          tiles: [tilesUrl],
+          minzoom: 5,
+          maxzoom: 14
+        });
+        
+        // Escuchar errores del source para diagnosticar problemas de conexión
+        const handleWetlandsError = (e) => {
+          if (e.sourceId === sourceId) {
+            const errorMessage = e.error?.message || e.error || 'Unknown error';
+            
+            // Filtrar errores comunes que son normales o del servidor
+            if (errorMessage === 'Internal Server Error' || 
+                errorMessage.includes('500') ||
+                errorMessage.includes('Internal Server')) {
+              // Estos son errores del servidor, no del cliente
+              // Solo loguear ocasionalmente para no saturar la consola
+              if (Math.random() < 0.01) { // Solo 1% de las veces
+                console.warn('⚠️ Wetlands tile server error (Internal Server Error). This is a server-side issue.');
+              }
+              return;
+            }
+            
+            // Para otros errores, mostrar información de diagnóstico
+            console.error('❌ Wetlands source error:', {
+              error: errorMessage,
+              tile: e.tile,
+              sourceId: e.sourceId,
+              url: tilesUrl,
+              tileCoords: e.tile ? { z: e.tile.z, x: e.tile.x, y: e.tile.y } : null
+            });
+            
+            // Si es un error de conexión y estamos en HTTPS, sugerir verificar HTTPS
+            if (window.location.protocol === 'https:' && 
+                (errorMessage.includes('Failed to fetch') || 
+                 errorMessage.includes('network') ||
+                 errorMessage.includes('Mixed Content'))) {
+              console.warn('⚠️ Possible HTTPS issue. Ensure tile server supports HTTPS at:', TILE_SERVER_URL);
+            }
+          }
+        };
+        
+        map.current.on('error', handleWetlandsError);
+
+        // Función para agregar las layers de wetlands
+        const addWetlandsLayers = () => {
+          try {
+            // Verificar que el source existe antes de agregar layers
+            const source = map.current.getSource(sourceId);
+            if (!source) {
+              console.warn('⚠️ Wetlands source not available yet');
+              return;
+            }
+
+            // Verificar los source-layers disponibles en el source
+            // Intentar obtener vectorLayers de diferentes maneras
+            let vectorLayers = null;
+            if (source.vectorLayers) {
+              vectorLayers = source.vectorLayers;
+            } else if (source._tileJSON && source._tileJSON.vector_layers) {
+              vectorLayers = source._tileJSON.vector_layers;
+            } else if (source.tileJSON && source.tileJSON.vector_layers) {
+              vectorLayers = source.tileJSON.vector_layers;
+            }
+            
+            if (vectorLayers) {
+              console.log('💧 Available source-layers in wetlands tiles:', vectorLayers.map(l => l.id || l.name));
+            } else {
+              console.log('💧 VectorLayers not available yet, using default source-layer: "wetlands"');
+              console.log('💧 Source object keys:', Object.keys(source));
+            }
+
+            // Agregar layer de fill solo si no existe
+            if (!map.current.getLayer(fillLayerId)) {
+              const fillLayer = {
+                id: fillLayerId,
+                type: 'fill',
+                source: sourceId,
+                'source-layer': 'wetlands',
+                paint: {
+                  'fill-color': [
+                    'match',
+                    ['get', 'wetland_type'],
+                    'Freshwater Emergent Wetland', '#10b981',
+                    'Freshwater Forested/Shrub Wetland', '#3b82f6',
+                    'Freshwater Pond', '#8b5cf6',
+                    'Estuarine and Marine Wetland', '#f59e0b',
+                    'Estuarine and Marine Deepwater', '#06b6d4',
+                    'Riverine', '#ef4444',
+                    '#6b7280' // default/other
+                  ],
+                  'fill-opacity': 0.7
+                }
+              };
+              
+              try {
+                map.current.addLayer(fillLayer);
+                console.log('✅ Wetlands fill layer added:', fillLayerId);
+              } catch (layerError) {
+                console.error('❌ Error adding wetlands fill layer:', layerError);
+                // Si el error es por source-layer, intentar sin especificar o con otro nombre
+                if (layerError.message && layerError.message.includes('source-layer')) {
+                  console.warn('⚠️ Trying to add layer without source-layer specification');
+                  // Intentar agregar sin source-layer (usará el primero disponible)
+                  try {
+                    const fillLayerNoSource = { ...fillLayer };
+                    delete fillLayerNoSource['source-layer'];
+                    map.current.addLayer(fillLayerNoSource);
+                    console.log('✅ Wetlands fill layer added without source-layer');
+                  } catch (e2) {
+                    console.error('❌ Still failed:', e2);
+                  }
+                }
+              }
+            } else {
+              console.log('⚠️ Wetlands fill layer already exists');
+            }
+
+            // Agregar layer de outline solo si no existe
+            if (!map.current.getLayer(outlineLayerId)) {
+              const outlineLayer = {
+                id: outlineLayerId,
+                type: 'line',
+                source: sourceId,
+                'source-layer': 'wetlands',
+                paint: {
+                  'line-color': '#000',
+                  'line-width': 0.5,
+                  'line-opacity': 0.3
+                }
+              };
+              
+              map.current.addLayer(outlineLayer);
+              console.log('✅ Wetlands outline layer added:', outlineLayerId);
+            } else {
+              console.log('⚠️ Wetlands outline layer already exists');
+            }
+
+            // Verificar que las layers se agregaron correctamente
+            const addedFillLayer = map.current.getLayer(fillLayerId);
+            const addedOutlineLayer = map.current.getLayer(outlineLayerId);
+            
+            console.log('💧 Wetlands layers status:', {
+              fillLayerExists: !!addedFillLayer,
+              outlineLayerExists: !!addedOutlineLayer,
+              fillLayerVisible: addedFillLayer ? map.current.getLayoutProperty(fillLayerId, 'visibility') !== 'none' : false,
+              outlineLayerVisible: addedOutlineLayer ? map.current.getLayoutProperty(outlineLayerId, 'visibility') !== 'none' : false
+            });
+
+            console.log('✅ Wetlands layers added successfully');
+          } catch (layerError) {
+            console.error('❌ Error adding wetlands layers:', layerError);
+          }
+        };
+
+        // Intentar obtener vectorLayers del TileJSON cuando esté disponible
+        const checkTileJSON = () => {
+          const source = map.current.getSource(sourceId);
+          if (!source) return null;
+          
+          // Intentar obtener vectorLayers de diferentes maneras
+          let vectorLayers = null;
+          if (source.vectorLayers) {
+            vectorLayers = source.vectorLayers;
+          } else if (source._tileJSON && source._tileJSON.vector_layers) {
+            vectorLayers = source._tileJSON.vector_layers;
+          } else if (source.tileJSON && source.tileJSON.vector_layers) {
+            vectorLayers = source.tileJSON.vector_layers;
+          } else if (source._tileJSONRequest && source._tileJSONRequest._callback) {
+            // El TileJSON puede estar en el callback
+            try {
+              const tileJSON = source._tileJSONRequest._callback;
+              if (tileJSON && tileJSON.vector_layers) {
+                vectorLayers = tileJSON.vector_layers;
+              }
+            } catch (e) {
+              // Ignorar errores
+            }
+          }
+          
+          return vectorLayers;
+        };
+
+        // Escuchar el evento sourcedata para agregar las layers cuando el source esté listo
+        const handleSourceData = (e) => {
+          if (e.sourceId === sourceId) {
+            const source = map.current.getSource(sourceId);
+            
+            if (source) {
+              const vectorLayers = checkTileJSON();
+              
+              console.log('💧 Wetlands source ready:', {
+                sourceId: e.sourceId,
+                sourceState: e.sourceState,
+                isSourceLoaded: e.isSourceLoaded,
+                hasVectorLayers: !!vectorLayers,
+                vectorLayers: vectorLayers ? vectorLayers.map(l => l.id || l.name) : 'not available yet'
+              });
+              
+              // Si tenemos vectorLayers, actualizar el source-layer si es necesario
+              if (vectorLayers && vectorLayers.length > 0) {
+                const firstLayer = vectorLayers[0];
+                const actualSourceLayer = firstLayer.id || firstLayer.name;
+                console.log('💧 Found source-layer:', actualSourceLayer);
+                
+                // Si el source-layer es diferente, actualizar las layers
+                if (actualSourceLayer !== 'wetlands') {
+                  console.log(`⚠️ Source-layer is "${actualSourceLayer}", not "wetlands". Updating layers...`);
+                  // Remover layers existentes y recrearlas con el source-layer correcto
+                  if (map.current.getLayer(fillLayerId)) {
+                    map.current.removeLayer(fillLayerId);
+                  }
+                  if (map.current.getLayer(outlineLayerId)) {
+                    map.current.removeLayer(outlineLayerId);
+                  }
+                  // Actualizar el source-layer en la función addWetlandsLayers
+                  // Por ahora, intentar agregar con el source-layer correcto
+                }
+              }
+              
+              // Agregar las layers cuando el source esté listo
+              if (!map.current.getLayer(fillLayerId) || !map.current.getLayer(outlineLayerId)) {
+                console.log('💧 Adding wetlands layers after source is ready');
+                addWetlandsLayers();
+              }
+              
+              // Si el source está completamente cargado y tenemos vectorLayers, remover el listener
+              if (e.isSourceLoaded && vectorLayers && vectorLayers.length > 0) {
+                console.log('💧 Source fully loaded with vectorLayers, removing listener');
+                map.current.off('sourcedata', handleSourceData);
+              }
+            }
+          }
+        };
+        
+        map.current.on('sourcedata', handleSourceData);
+        
+        // También intentar agregar las layers inmediatamente (por si el source ya está cargado)
+        // Esto es útil si el source se carga muy rápido
+        setTimeout(() => {
+          const source = map.current.getSource(sourceId);
+          if (source && (!map.current.getLayer(fillLayerId) || !map.current.getLayer(outlineLayerId))) {
+            console.log('💧 Attempting to add wetlands layers after timeout');
+            addWetlandsLayers();
+          }
+          
+          // Verificar TileJSON después de un tiempo
+          const vectorLayers = checkTileJSON();
+          if (vectorLayers && vectorLayers.length > 0) {
+            console.log('💧 TileJSON loaded, available source-layers:', vectorLayers.map(l => l.id || l.name));
+          }
+        }, 1000);
+
+        // Cleanup: remover el listener cuando el componente se desmonte o showWetlands cambie
+        return () => {
+          if (map.current) {
+            map.current.off('sourcedata', handleSourceData);
+            map.current.off('error', handleWetlandsError);
+          }
+        };
+      } catch (error) {
+        console.error('❌ Error adding wetlands source:', error);
+      }
+    }
+
+    // Cleanup: no hay nada que limpiar si showWetlands es false
+    return () => {
+      // El cleanup del listener se maneja dentro del bloque if (showWetlands)
+    };
+  }, [showWetlands, mapLoaded]);
+
+  // Función para obtener color basado en el valor del precio
+  const getPriceColor = (value) => {
+    if (!value || value === 0) return '#fbbf24'; // Light yellow for no data
+    
+    // Mapear valores a colores según la leyenda: $0, $300K, $500K, $800K, $1.2M+
+    if (value < 300000) return '#dc2626';      // Red - $0 to $300K
+    if (value < 500000) return '#f97316';      // Orange - $300K to $500K
+    if (value < 800000) return '#fbbf24';      // Yellow - $500K to $800K
+    if (value < 1200000) return '#84cc16';     // Light green - $800K to $1.2M
+    return '#22c55e';                          // Green - $1.2M+
+  };
+
+  // Función para agregar capa de Price Heatmap
+  const addPriceHeatmapLayer = (data) => {
+    if (!map.current) return;
+
+    const layerId = 'price-heatmap';
+
+    // Convertir datos a GeoJSON si no lo están ya
+    let geojson;
+    if (data.type === 'FeatureCollection') {
+      geojson = data;
+    } else if (Array.isArray(data)) {
+      // Si es un array de features o objetos
+      geojson = {
+        type: 'FeatureCollection',
+        features: data.map((item, index) => {
+          // Si ya es una feature, usarla directamente
+          if (item.type === 'Feature') {
+            return item;
+          }
+          // Si es un objeto con geometry, convertirla
+          if (item.geometry) {
+            return {
+              type: 'Feature',
+              properties: item.properties || {},
+              geometry: item.geometry
+            };
+          }
+          // Si no tiene estructura clara, intentar inferirla
+          return {
+            type: 'Feature',
+            properties: item,
+            geometry: item.geom || item.geometry || { type: 'Polygon', coordinates: [] }
+          };
+        }).filter(f => f.geometry && f.geometry.coordinates && f.geometry.coordinates.length > 0)
+      };
+    } else {
+      console.error('❌ Invalid heatmap data format:', data);
+      return;
+    }
+
+    // Validar que las features tengan geometrías válidas
+    const validFeatures = geojson.features.filter(f => {
+      if (!f.geometry) {
+        console.warn('⚠️ Feature sin geometry:', f);
+        return false;
+      }
+      if (!f.geometry.coordinates || f.geometry.coordinates.length === 0) {
+        console.warn('⚠️ Feature sin coordinates:', f);
+        return false;
+      }
+      if (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon') {
+        console.warn('⚠️ Feature con tipo de geometry incorrecto:', f.geometry.type, f);
+        return false;
+      }
+      return true;
+    });
+
+    console.log('📊 Heatmap GeoJSON:', { 
+      type: geojson.type, 
+      totalFeatures: geojson.features?.length || 0,
+      validFeatures: validFeatures.length,
+      sampleFeature: validFeatures[0],
+      sampleGeometry: validFeatures[0]?.geometry
+    });
+
+    if (!validFeatures || validFeatures.length === 0) {
+      console.warn('⚠️ No valid features in heatmap data');
+      return;
+    }
+
+    // Usar solo las features válidas
+    geojson.features = validFeatures;
+
+    try {
+      // Agregar fuente de datos
+      const sourceId = `${layerId}-data`;
+      map.current.addSource(sourceId, {
+        type: 'geojson',
+        data: geojson
+      });
+
+      // Esperar a que la fuente se cargue antes de agregar la capa
+      const source = map.current.getSource(sourceId);
+      if (!source) {
+        console.error('❌ Source not found after adding');
+        return;
+      }
+
+      // Verificar que la fuente tenga datos
+      source.on('data', (e) => {
+        if (e.sourceState === 'loaded') {
+          console.log('✅ Heatmap source loaded successfully');
+        }
+      });
+
+      // Buscar el campo que contiene el precio (puede tener diferentes nombres)
+      const sampleFeature = geojson.features[0];
+      let priceField = 'price';
+      
+      if (sampleFeature && sampleFeature.properties) {
+        // Buscar el campo que contiene el precio verificando que exista y no sea null
+        if (sampleFeature.properties.price !== undefined && sampleFeature.properties.price !== null) {
+          priceField = 'price';
+        } else if (sampleFeature.properties.avg_price !== undefined && sampleFeature.properties.avg_price !== null) {
+          priceField = 'avg_price';
+        } else if (sampleFeature.properties.sale_price !== undefined && sampleFeature.properties.sale_price !== null) {
+          priceField = 'sale_price';
+        } else if (sampleFeature.properties.value !== undefined && sampleFeature.properties.value !== null) {
+          priceField = 'value';
+        }
+      }
+
+      console.log('🎨 Using price field name:', priceField, 'Sample value:', sampleFeature?.properties?.[priceField], 'All properties:', sampleFeature?.properties);
+      console.log('📐 Sample geometry:', sampleFeature?.geometry);
+
+      // Agregar capa de relleno con colores basados en el valor
+      // Usar step para rangos discretos de colores
+      const layerConfig = {
+        id: layerId,
+        type: 'fill',
+        source: sourceId,
+        paint: {
+          'fill-color': [
+            'step',
+            ['to-number', ['get', priceField]],
+            '#E53935',      // Default - Red for Under $200K
+            200000, '#FFC107',  // Yellow - $200K - $350K
+            350000, '#FB8C00',  // Orange - $350K - $400K
+            400000, '#7E57C2',  // Purple - $400K - $600K
+            600000, '#4285F4',  // Blue - $600K - $700K
+            700000, '#9E9E9E'   // Gray - $700K+
+          ],
+          'fill-opacity': 0.6,
+          'fill-outline-color': '#ffffff'
+        }
+      };
+
+      // Intentar agregar antes de las etiquetas, pero si no existe, agregar al final
+      try {
+        if (map.current.getLayer('road-label')) {
+          map.current.addLayer(layerConfig, 'road-label');
+        } else {
+          map.current.addLayer(layerConfig);
+        }
+      } catch (e) {
+        // Si falla, intentar agregar sin beforeId
+        map.current.addLayer(layerConfig);
+      }
+
+      // Verificar que la capa se agregó correctamente
+      const addedLayer = map.current.getLayer(layerId);
+      if (addedLayer) {
+        console.log('✅ Price heatmap layer added successfully:', {
+          layerId,
+          sourceId,
+          featureCount: geojson.features.length,
+          priceField,
+          layerExists: !!addedLayer
+        });
+
+        // Agregar evento de click en los cuadros del heatmap
+        map.current.on('click', layerId, (e) => {
+          const features = map.current.queryRenderedFeatures(e.point, {
+            layers: [layerId]
+          });
+          
+          if (features.length > 0 && onMarkerClick) {
+            const feature = features[0];
+            const properties = feature.properties;
+            console.log('🖱️ Heatmap grid clicked:', properties);
+            
+            // Crear objeto de datos para el modal
+            const gridData = {
+              grid_id: properties.grid_id || properties.id,
+              category: 'grid_sales',
+              ...properties
+            };
+            
+            onMarkerClick(gridData);
+          }
+        });
+
+        // Cambiar cursor al hacer hover sobre los cuadros
+        map.current.on('mouseenter', layerId, () => {
+          map.current.getCanvas().style.cursor = 'pointer';
+        });
+        
+        map.current.on('mouseleave', layerId, () => {
+          map.current.getCanvas().style.cursor = '';
+        });
+      } else {
+        console.error('❌ Layer was not added successfully');
+      }
+    } catch (error) {
+      console.error('❌ Error adding heatmap layer:', error);
+    }
+  };
+
+  // Función para agregar capa de Count Heatmap
+  const addCountHeatmapLayer = (data) => {
+    if (!map.current) return;
+
+    const layerId = 'count-heatmap';
+
+    // Convertir datos a GeoJSON si no lo están ya
+    let geojson;
+    if (data.type === 'FeatureCollection') {
+      geojson = data;
+    } else if (Array.isArray(data)) {
+      geojson = {
+        type: 'FeatureCollection',
+        features: data.map((item, index) => {
+          if (item.type === 'Feature') {
+            return item;
+          }
+          if (item.geometry) {
+            return {
+              type: 'Feature',
+              properties: item.properties || {},
+              geometry: item.geometry
+            };
+          }
+          return {
+            type: 'Feature',
+            properties: item,
+            geometry: item.geom || item.geometry || { type: 'Polygon', coordinates: [] }
+          };
+        }).filter(f => f.geometry && f.geometry.coordinates && f.geometry.coordinates.length > 0)
+      };
+    } else {
+      console.error('❌ Invalid count heatmap data format:', data);
+      return;
+    }
+
+    // Validar que las features tengan geometrías válidas
+    const validFeatures = geojson.features.filter(f => {
+      if (!f.geometry) return false;
+      if (!f.geometry.coordinates || f.geometry.coordinates.length === 0) return false;
+      if (f.geometry.type !== 'Polygon' && f.geometry.type !== 'MultiPolygon') return false;
+      return true;
+    });
+
+    console.log('📊 Count Heatmap GeoJSON:', { 
+      type: geojson.type, 
+      totalFeatures: geojson.features?.length || 0,
+      validFeatures: validFeatures.length,
+      sampleFeature: validFeatures[0]
+    });
+
+    if (!validFeatures || validFeatures.length === 0) {
+      console.warn('⚠️ No valid features in count heatmap data');
+      return;
+    }
+
+    geojson.features = validFeatures;
+
+    try {
+      const sourceId = `${layerId}-data`;
+      map.current.addSource(sourceId, {
+        type: 'geojson',
+        data: geojson
+      });
+
+      const source = map.current.getSource(sourceId);
+      if (!source) {
+        console.error('❌ Source not found after adding');
+        return;
+      }
+
+      source.on('data', (e) => {
+        if (e.sourceState === 'loaded') {
+          console.log('✅ Count heatmap source loaded successfully');
+        }
+      });
+
+      // Buscar el campo que contiene el conteo (sales_count)
+      const sampleFeature = geojson.features[0];
+      let countField = 'sales_count';
+      
+      if (sampleFeature && sampleFeature.properties) {
+        if (sampleFeature.properties.sales_count !== undefined && sampleFeature.properties.sales_count !== null) {
+          countField = 'sales_count';
+        } else if (sampleFeature.properties.count !== undefined && sampleFeature.properties.count !== null) {
+          countField = 'count';
+        }
+      }
+
+      console.log('🎨 Using count field name:', countField, 'Sample value:', sampleFeature?.properties?.[countField]);
+
+      // Agregar capa de relleno con colores basados en el conteo
+      const layerConfig = {
+        id: layerId,
+        type: 'fill',
+        source: sourceId,
+        paint: {
+          'fill-color': [
+            'step',
+            ['to-number', ['get', countField]],
+            '#FFC107',      // Default - Yellow (Below average)
+            35, '#22c55e',  // Green (Average - 35 sales)
+            36, '#4285F4'  // Blue (Above mean)
+          ],
+          'fill-opacity': 0.6,
+          'fill-outline-color': '#ffffff'
+        }
+      };
+
+      try {
+        if (map.current.getLayer('road-label')) {
+          map.current.addLayer(layerConfig, 'road-label');
+        } else {
+          map.current.addLayer(layerConfig);
+        }
+      } catch (e) {
+        map.current.addLayer(layerConfig);
+      }
+
+      const addedLayer = map.current.getLayer(layerId);
+      if (addedLayer) {
+        console.log('✅ Count heatmap layer added successfully:', {
+          layerId,
+          sourceId,
+          featureCount: geojson.features.length,
+          countField,
+          layerExists: !!addedLayer
+        });
+
+        // Agregar evento de click en los cuadros del count heatmap
+        map.current.on('click', layerId, (e) => {
+          const features = map.current.queryRenderedFeatures(e.point, {
+            layers: [layerId]
+          });
+          
+          if (features.length > 0 && onMarkerClick) {
+            const feature = features[0];
+            const properties = feature.properties;
+            console.log('🖱️ Count heatmap grid clicked:', properties);
+            
+            const gridData = {
+              grid_id: properties.grid_id || properties.id,
+              category: 'grid_sales',
+              ...properties
+            };
+            
+            onMarkerClick(gridData);
+          }
+        });
+
+        map.current.on('mouseenter', layerId, () => {
+          map.current.getCanvas().style.cursor = 'pointer';
+        });
+        
+        map.current.on('mouseleave', layerId, () => {
+          map.current.getCanvas().style.cursor = '';
+        });
+      } else {
+        console.error('❌ Count heatmap layer was not added successfully');
+      }
+    } catch (error) {
+      console.error('❌ Error adding count heatmap layer:', error);
+    }
+  };
+
   return (
     <div className="mapbox-container">
       <div ref={mapContainer} className="mapbox-map" style={{ width: '100%', height: '100%' }} />
@@ -1070,6 +2158,8 @@ const MapboxMap = ({
       )}
     </div>
   );
-};
+});
+
+MapboxMap.displayName = 'MapboxMap';
 
 export default MapboxMap;

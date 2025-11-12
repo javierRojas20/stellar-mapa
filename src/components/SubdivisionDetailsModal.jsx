@@ -152,3 +152,4 @@ const SubdivisionDetailsModal = ({ subdivision, isOpen, onClose, loading = false
 };
 
 export default SubdivisionDetailsModal;
+

@@ -1,0 +1,22 @@
+#!/usr/bin/expect -f
+
+set timeout 30
+set server_ip "134.209.216.156"
+set server_pass "17&\\WW#qO53Z"
+
+spawn scp -o StrictHostKeyChecking=no dist/index.html root@${server_ip}:/var/www/html/index.html
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+        exp_continue
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}
+
+wait
+

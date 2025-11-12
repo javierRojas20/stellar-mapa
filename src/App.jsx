@@ -1,14 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import stellarLogo from './assets/stellar-communities-logo.svg';
 import MapboxMap from './components/MapboxMap';
 import CategoryModalManager from './components/CategoryModalManager';
+import AddressSearch from './components/AddressSearch';
 import { useSupabase } from './hooks/useSupabase';
 import { useCategories } from './hooks/useCategories';
 import { useCategoryData } from './hooks/useCategoryData';
+import { usePipelineFilters } from './hooks/usePipelineFilters';
+import { usePipelineData } from './hooks/usePipelineData';
+import { usePriceHeatmap } from './hooks/usePriceHeatmap';
+import { useCountHeatmap } from './hooks/useCountHeatmap';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Auth from './components/Auth';
 import { testTableAccess, testCommonTables, addSampleHospitals, testTableWithSchema, createHospitalsCategory, getHospitalById, getItemDetailsById } from './services/dataLoader';
 import './App.css';
+import GridSalesModal from './components/GridSalesModal';
 
 // Componente principal de la aplicación
 const AppContent = () => {
@@ -21,14 +27,158 @@ const AppContent = () => {
   const [showDealModal, setShowDealModal] = useState(false);
   const [modalDeal, setModalDeal] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
+  
+  // Estados para Grid Sales Modal
+  const [showGridModal, setShowGridModal] = useState(false);
+  const [gridData, setGridData] = useState(null);
+  const [gridLoading, setGridLoading] = useState(false);
+  
   const [layers, setLayers] = useState({
     'stellar-pipeline': true
   });
 
+  // Obtener filtros solo cuando el switch esté activo
+  const isPipelineActive = layers['stellar-pipeline'] || false;
+  const { statuses, products, loading: filtersLoading, error: filtersError } = usePipelineFilters(isPipelineActive);
+  
+  // Estados para los valores seleccionados en los selects
+  const [selectedProduct, setSelectedProduct] = useState('');
+  const [selectedStatus, setSelectedStatus] = useState('');
+  
   // Estados para Radius Analysis
   const [showRadiusAnalysis, setShowRadiusAnalysis] = useState(false);
   const [radiusMiles, setRadiusMiles] = useState(1);
   const [radiusValue, setRadiusValue] = useState(1609); // 1 mile in meters
+
+  // Estados para Price Heatmap
+  const [showPriceHeatmap, setShowPriceHeatmap] = useState(false);
+  const [selectedPriceRange, setSelectedPriceRange] = useState(null); // null = todos, o un rango específico
+  
+  // Estados para Count Heatmap
+  const [showCountHeatmap, setShowCountHeatmap] = useState(false);
+  const [selectedCountRange, setSelectedCountRange] = useState(null); // null = todos, o un rango específico
+
+  // Estados para Wetlands
+  const [showWetlands, setShowWetlands] = useState(false);
+
+  // Estados para bounds del mapa (para heatmap)
+  const [mapBounds, setMapBounds] = useState(null);
+  
+  // Referencia al mapa para controlarlo desde fuera
+  const mapRef = useRef(null);
+  
+  // Función para manejar la selección de una ubicación desde la búsqueda
+  const handleLocationSelect = (location) => {
+    if (mapRef.current) {
+      // Si hay bbox, usarlo para hacer zoom al área
+      // El bbox viene como [minLng, minLat, maxLng, maxLat]
+      if (location.bbox && Array.isArray(location.bbox) && location.bbox.length === 4) {
+        mapRef.current.fitBounds(
+          [[location.bbox[0], location.bbox[1]], [location.bbox[2], location.bbox[3]]],
+          {
+            padding: 50,
+            maxZoom: 15
+          }
+        );
+      } else {
+        // Si no hay bbox, hacer zoom a las coordenadas
+        mapRef.current.flyTo({
+          center: [location.longitude, location.latitude],
+          zoom: 15,
+          duration: 1500
+        });
+      }
+    }
+  };
+  
+  // Cargar datos de stellar_pipeline con filtros
+  const { data: pipelineData, loading: pipelineDataLoading } = usePipelineData(
+    isPipelineActive,
+    selectedProduct,
+    selectedStatus
+  );
+
+  // Cargar datos del heatmap de precios
+  const { data: priceHeatmapData, loading: priceHeatmapLoading } = usePriceHeatmap(
+    showPriceHeatmap,
+    mapBounds,
+    1000
+  );
+
+  // Cargar datos del heatmap de conteo
+  const { data: countHeatmapData, loading: countHeatmapLoading } = useCountHeatmap(
+    showCountHeatmap,
+    mapBounds,
+    1000
+  );
+
+  // Filtrar datos del heatmap según el rango seleccionado (nuevos rangos)
+  const filteredHeatmapData = React.useMemo(() => {
+    if (!priceHeatmapData || !priceHeatmapData.features || !selectedPriceRange) {
+      return priceHeatmapData;
+    }
+
+    const filteredFeatures = priceHeatmapData.features.filter(feature => {
+      const price = feature.properties?.avg_price || feature.properties?.price || 0;
+      
+      switch (selectedPriceRange) {
+        case 'under200k':
+          return price > 0 && price < 200000;
+        case 'twoToThree':
+          return price >= 200000 && price < 350000;
+        case 'threeToFour':
+          return price >= 350000 && price < 400000;
+        case 'fourToSix':
+          return price >= 400000 && price < 600000;
+        case 'sixToSeven':
+          return price >= 600000 && price < 700000;
+        case 'over700k':
+          return price >= 700000;
+        default:
+          return true;
+      }
+    });
+
+    return {
+      ...priceHeatmapData,
+      features: filteredFeatures
+    };
+  }, [priceHeatmapData, selectedPriceRange]);
+
+  // Filtrar datos del count heatmap según el rango seleccionado (usando sales_count)
+  const filteredCountHeatmapData = React.useMemo(() => {
+    if (!countHeatmapData || !countHeatmapData.features || !selectedCountRange) {
+      return countHeatmapData;
+    }
+
+    const filteredFeatures = countHeatmapData.features.filter(feature => {
+      const salesCount = feature.properties?.sales_count || feature.properties?.count || 0;
+      
+      switch (selectedCountRange) {
+        case 'belowAverage':
+          return salesCount < 35;
+        case 'average':
+          return salesCount === 35;
+        case 'aboveMean':
+          return salesCount > 35;
+        default:
+          return true;
+      }
+    });
+
+    return {
+      ...countHeatmapData,
+      features: filteredFeatures
+    };
+  }, [countHeatmapData, selectedCountRange]);
+
+  // Limpiar filtros cuando se desactiva el switch
+  useEffect(() => {
+    if (!isPipelineActive) {
+      setSelectedProduct('');
+      setSelectedStatus('');
+    }
+  }, [isPipelineActive]);
 
   // Inicializar layers con las categorías de la base de datos
   useEffect(() => {
@@ -165,6 +315,35 @@ const AppContent = () => {
     console.log(`🔍 DealData categoryId:`, dealData.categoryId);
     console.log(`🔍 Available categories:`, categories);
     
+    // Si es un click en un grid del heatmap, mostrar modal de grid sales
+    if (dealData.category === 'grid_sales' || dealData.grid_id) {
+      const gridId = dealData.grid_id || dealData.id;
+      console.log(`🖱️ Grid clicked, using data from heatmap for grid_id:`, gridId);
+      console.log(`📊 Available grid data:`, dealData);
+      
+      // Los datos del grid ya vienen en las propiedades del feature del GeoJSON
+      // No necesitamos hacer otra consulta, usamos los datos que ya tenemos
+      setShowGridModal(true);
+      setGridLoading(false); // No hay carga, los datos ya están
+      
+      // Preparar los datos del grid con los valores disponibles
+      setGridData({
+        grid_id: gridId,
+        avg_price: dealData.avg_price || dealData.price || 0,
+        sales_count: dealData.sales_count || dealData.total_sales || 0,
+        sales_count_single_family: dealData.sales_count_single_family || dealData.single_family_count || 0,
+        sales_count_townhome: dealData.sales_count_townhome || dealData.townhome_count || 0,
+        sales_count_condominium: dealData.sales_count_condominium || dealData.condominium_count || 0,
+        price_change_percent: dealData.price_change_percent || dealData.price_change || 0,
+        // Intentar calcular valores si no están disponibles
+        single_family_value: dealData.single_family_value || (dealData.avg_price * (dealData.sales_count_single_family || 0)),
+        townhome_value: dealData.townhome_value || (dealData.avg_price * (dealData.sales_count_townhome || 0)),
+        total_sales: dealData.sales_count || dealData.total_sales || 0,
+        ...dealData
+      });
+      return;
+    }
+    
     // Debug: Mostrar información detallada de las categorías
     console.log(`🔍 Categories details:`, categories.map(cat => ({
       id: cat.id,
@@ -222,6 +401,12 @@ const AppContent = () => {
     setShowDealModal(false);
     setModalDeal(null);
     setModalLoading(false);
+  };
+  
+  const handleCloseGridModal = () => {
+    setShowGridModal(false);
+    setGridData(null);
+    setGridLoading(false);
   };
 
   // Función para toggle del dropdown
@@ -321,6 +506,163 @@ const AppContent = () => {
     setIsRadiusMode(!showRadiusAnalysis);
   };
 
+  // Función para alternar Price Heatmap
+  const togglePriceHeatmap = () => {
+    const newValue = !showPriceHeatmap;
+    setShowPriceHeatmap(newValue);
+    // Limpiar filtro cuando se desactiva el heatmap
+    if (!newValue) {
+      setSelectedPriceRange(null);
+    }
+  };
+
+  // Función para calcular estadísticas del heatmap con nuevos rangos
+  const getHeatmapStats = () => {
+    if (!priceHeatmapData || !priceHeatmapData.features || priceHeatmapData.features.length === 0) {
+      return {
+        hasData: false,
+        totalGrids: 0,
+        ranges: {
+          under200k: 0,    // Under $200K
+          twoToThree: 0,   // $200K - $350K
+          threeToFour: 0,  // $350K - $400K
+          fourToSix: 0,    // $400K - $600K
+          sixToSeven: 0,   // $600K - $700K
+          over700k: 0     // $700K+
+        },
+        minPrice: 0,
+        maxPrice: 0,
+        avgPrice: 0
+      };
+    }
+
+    const features = priceHeatmapData.features;
+    let under200k = 0, twoToThree = 0, threeToFour = 0, fourToSix = 0, sixToSeven = 0, over700k = 0;
+    let totalPrice = 0;
+    let minPrice = Infinity;
+    let maxPrice = 0;
+    let validPrices = 0;
+
+    features.forEach(feature => {
+      const price = feature.properties?.avg_price || feature.properties?.price || 0;
+      
+      if (price > 0) {
+        validPrices++;
+        totalPrice += price;
+        minPrice = Math.min(minPrice, price);
+        maxPrice = Math.max(maxPrice, price);
+
+        if (price < 200000) {
+          under200k++;
+        } else if (price < 350000) {
+          twoToThree++;
+        } else if (price < 400000) {
+          threeToFour++;
+        } else if (price < 600000) {
+          fourToSix++;
+        } else if (price < 700000) {
+          sixToSeven++;
+        } else {
+          over700k++;
+        }
+      }
+    });
+
+    return {
+      hasData: validPrices > 0,
+      totalGrids: features.length,
+      validGrids: validPrices,
+      ranges: {
+        under200k,
+        twoToThree,
+        threeToFour,
+        fourToSix,
+        sixToSeven,
+        over700k
+      },
+      minPrice: minPrice === Infinity ? 0 : minPrice,
+      maxPrice,
+      avgPrice: validPrices > 0 ? totalPrice / validPrices : 0
+    };
+  };
+
+  const heatmapStats = getHeatmapStats();
+
+  // Función para alternar Count Heatmap
+  const toggleCountHeatmap = () => {
+    const newValue = !showCountHeatmap;
+    setShowCountHeatmap(newValue);
+    // Limpiar filtro cuando se desactiva el heatmap
+    if (!newValue) {
+      setSelectedCountRange(null);
+    }
+  };
+
+  // Función para alternar Wetlands
+  const toggleWetlands = () => {
+    setShowWetlands(!showWetlands);
+  };
+
+  // Función para calcular estadísticas del count heatmap (3 rangos)
+  const getCountHeatmapStats = () => {
+    if (!countHeatmapData || !countHeatmapData.features || countHeatmapData.features.length === 0) {
+      return {
+        hasData: false,
+        totalGrids: 0,
+        ranges: {
+          belowAverage: 0,  // < 35
+          average: 0,       // = 35
+          aboveMean: 0      // > 35
+        },
+        minCount: 0,
+        maxCount: 0,
+        avgCount: 0
+      };
+    }
+
+    const features = countHeatmapData.features;
+    let belowAverage = 0, average = 0, aboveMean = 0;
+    let totalCount = 0;
+    let minCount = Infinity;
+    let maxCount = 0;
+    let validCounts = 0;
+
+    features.forEach(feature => {
+      const count = feature.properties?.sales_count || feature.properties?.count || 0;
+      
+      if (count > 0) {
+        validCounts++;
+        totalCount += count;
+        minCount = Math.min(minCount, count);
+        maxCount = Math.max(maxCount, count);
+
+        if (count < 35) {
+          belowAverage++;
+        } else if (count === 35) {
+          average++;
+        } else {
+          aboveMean++;
+        }
+      }
+    });
+
+    return {
+      hasData: validCounts > 0,
+      totalGrids: features.length,
+      validGrids: validCounts,
+      ranges: {
+        belowAverage,
+        average,
+        aboveMean
+      },
+      minCount: minCount === Infinity ? 0 : minCount,
+      maxCount,
+      avgCount: validCounts > 0 ? totalCount / validCounts : 0
+    };
+  };
+
+  const countHeatmapStats = getCountHeatmapStats();
+
   // Función para manejar cambio de radio
   const handleRadiusChange = (miles) => {
     setRadiusMiles(miles);
@@ -366,44 +708,29 @@ const AppContent = () => {
           </div>
           
           <div className="header-center">
-            <div className="search-container">
-              <div className="search-icon">🔍</div>
-              <input 
-                type="text" 
-                placeholder="Search for an address, parcel or saved site" 
-                className="search-input"
-              />
-            </div>
+            <AddressSearch 
+              onLocationSelect={handleLocationSelect}
+            />
           </div>
           
           <div className="header-right">
             <div className="header-actions">
-              <button 
-                onClick={testHospitalModal}
-                style={{ 
-                  padding: '8px 12px', 
-                  fontSize: '14px', 
-                  backgroundColor: '#d4edda', 
-                  border: '1px solid #28a745',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  marginRight: '10px'
-                }}
-              >
-                🏥 Test Modal
-              </button>
               <span className="help-text">Help & Support</span>
               <div className="status-indicator">
                 <div className="status-dot connected"></div>
               </div>
               <div className="dropdown-container">
-              <p className="user-email">{user.email}</p>
-                <button 
-                  className="menu-btn dropdown-toggle" 
+                <div 
+                  className="user-profile-header" 
                   onClick={toggleDropdown}
                 >
-                  M
-                </button>
+                  <button className="menu-btn">
+                    {user.email?.charAt(0).toUpperCase() || 'M'}
+                  </button>
+                  <div className="user-info-header">
+                    <span className="user-email">{user.email}</span>
+                  </div>
+                </div>
                 {showDropdown && (
                   <div className="dropdown-menu">
                     <div className="dropdown-item">Settings</div>
@@ -438,34 +765,63 @@ const AppContent = () => {
               <div className="pipeline-header">
                 <div className="pipeline-icon">🚀</div>
                 <span className="pipeline-title">Stellar Pipeline</span>
-                <div className={`toggle ${layers['stellar-pipeline'] ? 'active' : ''}`}>
+                <div 
+                  className={`toggle ${layers['stellar-pipeline'] ? 'active' : ''}`}
+                  onClick={() => toggleLayer('stellar-pipeline')}
+                >
                   <div className="toggle-slider"></div>
                 </div>
               </div>
             </div>
 
             {/* Pipeline Filters */}
-            <div className="filters-section">
-              <h3>Pipeline Filters</h3>
-              <div className="filter-group">
-                <label>Product</label>
-                <select className="filter-dropdown">
-                  <option>All Products</option>
-                  <option>Single Family</option>
-                  <option>Multi Family</option>
-                  <option>Commercial</option>
-                </select>
+            {layers['stellar-pipeline'] && (
+              <div className="filters-section">
+                <h3>Pipeline Filters</h3>
+                <div className="filter-group">
+                  <label>Product</label>
+                  <select 
+                    className="filter-dropdown" 
+                    disabled={filtersLoading || products.length === 0}
+                    value={selectedProduct}
+                    onChange={(e) => setSelectedProduct(e.target.value)}
+                  >
+                    {filtersLoading ? (
+                      <option>Cargando productos...</option>
+                    ) : products.length === 0 ? (
+                      <option>No hay productos disponibles</option>
+                    ) : (
+                      products.map((product, index) => (
+                        <option key={index} value={product === 'All Products' ? '' : product}>
+                          {product}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div className="filter-group">
+                  <label>Status</label>
+                  <select 
+                    className="filter-dropdown" 
+                    disabled={filtersLoading || statuses.length === 0}
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                  >
+                    {filtersLoading ? (
+                      <option>Cargando estados...</option>
+                    ) : statuses.length === 0 ? (
+                      <option>No hay estados disponibles</option>
+                    ) : (
+                      statuses.map((status, index) => (
+                        <option key={index} value={status === 'All Statuses' ? '' : status}>
+                          {status}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
               </div>
-              <div className="filter-group">
-                <label>Status</label>
-                <select className="filter-dropdown">
-                  <option>All Statuses</option>
-                  <option>Active</option>
-                  <option>Pending</option>
-                  <option>Completed</option>
-                </select>
-              </div>
-            </div>
+            )}
 
             {/* Data Layers */}
             <div className="layers-section">
@@ -532,51 +888,290 @@ const AppContent = () => {
                 </div>
               )}
             </div>
+
+            {/* Price Heatmap Card */}
+            <div className="heatmap-card">
+              <div className="heatmap-header" onClick={togglePriceHeatmap}>
+                <div className="heatmap-icon-dot"></div>
+                <div className="heatmap-icon-graph">📈</div>
+                <span className="heatmap-text">Price Heatmap (1-mile)</span>
+                <div className={`toggle ${showPriceHeatmap ? 'active' : ''}`}>
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+              {showPriceHeatmap && (
+                <div className="heatmap-content">
+                  <label className="heatmap-label">Sale Price</label>
+                  <div className="heatmap-gradient-container">
+                    <div className="heatmap-gradient">
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'under200k' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'under200k' ? null : 'under200k');
+                        }}
+                        title="Under $200K"
+                        style={{ backgroundColor: '#E53935' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'twoToThree' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'twoToThree' ? null : 'twoToThree');
+                        }}
+                        title="$200K - $350K"
+                        style={{ backgroundColor: '#FFC107' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'threeToFour' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'threeToFour' ? null : 'threeToFour');
+                        }}
+                        title="$350K - $400K"
+                        style={{ backgroundColor: '#FB8C00' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'fourToSix' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'fourToSix' ? null : 'fourToSix');
+                        }}
+                        title="$400K - $600K"
+                        style={{ backgroundColor: '#7E57C2' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'sixToSeven' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'sixToSeven' ? null : 'sixToSeven');
+                        }}
+                        title="$600K - $700K"
+                        style={{ backgroundColor: '#4285F4' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'over700k' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'over700k' ? null : 'over700k');
+                        }}
+                        title="$700K+"
+                        style={{ backgroundColor: '#9E9E9E' }}
+                      ></div>
+                    </div>
+                    <div className="heatmap-labels">
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'under200k' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'under200k' ? null : 'under200k')}
+                        title="Under $200K"
+                      >&lt;$200K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'twoToThree' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'twoToThree' ? null : 'twoToThree')}
+                        title="$200K - $350K"
+                      >$200-350K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'threeToFour' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'threeToFour' ? null : 'threeToFour')}
+                        title="$350K - $400K"
+                      >$350-400K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'fourToSix' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'fourToSix' ? null : 'fourToSix')}
+                        title="$400K - $600K"
+                      >$400-600K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'sixToSeven' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'sixToSeven' ? null : 'sixToSeven')}
+                        title="$600K - $700K"
+                      >$600-700K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'over700k' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'over700k' ? null : 'over700k')}
+                        title="$700K+"
+                      >$700K+</span>
+                    </div>
+                    {!heatmapStats.hasData && (
+                      <span className="heatmap-no-data">No data</span>
+                    )}
+                    {heatmapStats.hasData && (
+                      <div className="heatmap-stats">
+                        <span className="heatmap-stat-text">
+                          {heatmapStats.validGrids} grids • Avg: ${(heatmapStats.avgPrice / 1000).toFixed(0)}K
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Count Heatmap Card */}
+            <div className="heatmap-card">
+              <div className="heatmap-header" onClick={toggleCountHeatmap}>
+                <div className="heatmap-icon-dot"></div>
+                <span className="heatmap-text">Count Heatmap (1-mile)</span>
+                <div className={`toggle ${showCountHeatmap ? 'active' : ''}`}>
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+              {showCountHeatmap && (
+                <div className="heatmap-content">
+                  <label className="heatmap-label">Count</label>
+                  <div className="heatmap-gradient-container">
+                    <div className="heatmap-gradient">
+                      <div 
+                        className={`heatmap-range ${selectedCountRange === 'belowAverage' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'belowAverage' ? null : 'belowAverage');
+                        }}
+                        title="Debajo promedio"
+                        style={{ backgroundColor: '#FFC107' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedCountRange === 'average' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'average' ? null : 'average');
+                        }}
+                        title="Promedio (35 ventas)"
+                        style={{ backgroundColor: '#22c55e' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedCountRange === 'aboveMean' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'aboveMean' ? null : 'aboveMean');
+                        }}
+                        title="Above mean"
+                        style={{ backgroundColor: '#4285F4' }}
+                      ></div>
+                    </div>
+                    <div className="heatmap-labels count-heatmap-labels">
+                      <span 
+                        className={`heatmap-label-price ${selectedCountRange === 'belowAverage' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'belowAverage' ? null : 'belowAverage');
+                        }}
+                        title="Debajo promedio"
+                      >Debajo promedio</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedCountRange === 'average' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'average' ? null : 'average');
+                        }}
+                        title="Promedio (35 ventas)"
+                      >Promedio (35)</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedCountRange === 'aboveMean' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'aboveMean' ? null : 'aboveMean');
+                        }}
+                        title="Above mean"
+                      >Above mean</span>
+                    </div>
+                    {!countHeatmapStats.hasData && (
+                      <span className="heatmap-no-data">No data</span>
+                    )}
+                    {countHeatmapStats.hasData && (
+                      <div className="heatmap-stats" style={{marginTop: '5px !important'}}>
+                        <span className="heatmap-stat-text">
+                          {countHeatmapStats.validGrids} grids • Avg: {countHeatmapStats.avgCount.toFixed(1)} sales
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Wetlands Card */}
+            <div className="wetlands-card">
+              <div className="wetlands-header" onClick={toggleWetlands}>
+                <div className="wetlands-icon-circle"></div>
+                <div className="wetlands-icon-pin">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="#ff69b4"/>
+                  </svg>
+                </div>
+                <span className="wetlands-text">Wetlands</span>
+                <div className={`toggle ${showWetlands ? 'active' : ''}`}>
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="dashboard">
         <div className="sidebar">
-          <div className="sidebar-tabs">
-            <div className="tab active">Data Layers</div>
-            <div className="tab">My Pipeline →</div>
-          </div>
-
           <div className="sidebar-content">
             {/* Stellar Pipeline Card */}
             <div className="pipeline-card">
               <div className="pipeline-header">
                 <div className="pipeline-icon">🚀</div>
                 <span className="pipeline-title">Stellar Pipeline</span>
-                <div className={`toggle ${layers['stellar-pipeline'] ? 'active' : ''}`}>
+                <div 
+                  className={`toggle ${layers['stellar-pipeline'] ? 'active' : ''}`}
+                  onClick={() => toggleLayer('stellar-pipeline')}
+                >
                   <div className="toggle-slider"></div>
                 </div>
               </div>
             </div>
 
             {/* Pipeline Filters */}
-            <div className="filters-section">
-              <h3>Pipeline Filters</h3>
-              <div className="filter-group">
-                <label>Product</label>
-                <select className="filter-dropdown">
-                  <option>All Products</option>
-                  <option>Single Family</option>
-                  <option>Multi Family</option>
-                  <option>Commercial</option>
-                </select>
+            {layers['stellar-pipeline'] && (
+              <div className="filters-section">
+                <h3>Pipeline Filters</h3>
+                <div className="filter-group">
+                  <label>Product</label>
+                  <select 
+                    className="filter-dropdown" 
+                    disabled={filtersLoading || products.length === 0}
+                    value={selectedProduct}
+                    onChange={(e) => setSelectedProduct(e.target.value)}
+                  >
+                    {filtersLoading ? (
+                      <option>Cargando productos...</option>
+                    ) : products.length === 0 ? (
+                      <option>No hay productos disponibles</option>
+                    ) : (
+                      products.map((product, index) => (
+                        <option key={index} value={product === 'All Products' ? '' : product}>
+                          {product}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div className="filter-group">
+                  <label>Status</label>
+                  <select 
+                    className="filter-dropdown" 
+                    disabled={filtersLoading || statuses.length === 0}
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                  >
+                    {filtersLoading ? (
+                      <option>Cargando estados...</option>
+                    ) : statuses.length === 0 ? (
+                      <option>No hay estados disponibles</option>
+                    ) : (
+                      statuses.map((status, index) => (
+                        <option key={index} value={status === 'All Statuses' ? '' : status}>
+                          {status}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
               </div>
-              <div className="filter-group">
-                <label>Status</label>
-                <select className="filter-dropdown">
-                  <option>All Statuses</option>
-                  <option>Active</option>
-                  <option>Pending</option>
-                  <option>Completed</option>
-                </select>
-              </div>
-            </div>
+            )}
 
             {/* Data Layers */}
             <div className="layers-section">
@@ -651,17 +1246,239 @@ const AppContent = () => {
                 </div>
               )}
             </div>
+
+            {/* Price Heatmap Card */}
+            <div className="heatmap-card" style={{marginBottom: '16px'}}>
+              <div className="heatmap-header" onClick={togglePriceHeatmap}>
+                <div className="heatmap-icon-dot"></div>
+                <span className="heatmap-text">Price Heatmap (1-mile)</span>
+                <div className={`toggle ${showPriceHeatmap ? 'active' : ''}`}>
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+              {showPriceHeatmap && (
+                <div className="heatmap-content">
+                  <label className="heatmap-label">Sale Price</label>
+                  <div className="heatmap-gradient-container">
+                    <div className="heatmap-gradient">
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'under200k' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'under200k' ? null : 'under200k');
+                        }}
+                        title="Under $200K"
+                        style={{ backgroundColor: '#E53935' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'twoToThree' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'twoToThree' ? null : 'twoToThree');
+                        }}
+                        title="$200K - $350K"
+                        style={{ backgroundColor: '#FFC107' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'threeToFour' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'threeToFour' ? null : 'threeToFour');
+                        }}
+                        title="$350K - $400K"
+                        style={{ backgroundColor: '#FB8C00' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'fourToSix' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'fourToSix' ? null : 'fourToSix');
+                        }}
+                        title="$400K - $600K"
+                        style={{ backgroundColor: '#7E57C2' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'sixToSeven' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'sixToSeven' ? null : 'sixToSeven');
+                        }}
+                        title="$600K - $700K"
+                        style={{ backgroundColor: '#4285F4' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedPriceRange === 'over700k' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPriceRange(selectedPriceRange === 'over700k' ? null : 'over700k');
+                        }}
+                        title="$700K+"
+                        style={{ backgroundColor: '#9E9E9E' }}
+                      ></div>
+                    </div>
+                    <div className="heatmap-labels">
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'under200k' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'under200k' ? null : 'under200k')}
+                        title="Under $200K"
+                      >&lt;$200K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'twoToThree' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'twoToThree' ? null : 'twoToThree')}
+                        title="$200K - $350K"
+                      >$200-350K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'threeToFour' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'threeToFour' ? null : 'threeToFour')}
+                        title="$350K - $400K"
+                      >$350-400K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'fourToSix' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'fourToSix' ? null : 'fourToSix')}
+                        title="$400K - $600K"
+                      >$400-600K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'sixToSeven' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'sixToSeven' ? null : 'sixToSeven')}
+                        title="$600K - $700K"
+                      >$600-700K</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedPriceRange === 'over700k' ? 'active' : ''}`}
+                        onClick={() => setSelectedPriceRange(selectedPriceRange === 'over700k' ? null : 'over700k')}
+                        title="$700K+"
+                      >$700K+</span>
+                    </div>
+                    {!heatmapStats.hasData && (
+                      <span className="heatmap-no-data">No data</span>
+                    )}
+                    {heatmapStats.hasData && (
+                      <div className="heatmap-stats" style={{marginTop: '5px !important'}}>
+                        <span className="heatmap-stat-text">
+                          {heatmapStats.validGrids} grids • Avg: ${(heatmapStats.avgPrice / 1000).toFixed(0)}K
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Count Heatmap Card */}
+            <div className="heatmap-card">
+              <div className="heatmap-header" onClick={toggleCountHeatmap}>
+                <div className="heatmap-icon-dot"></div>
+                <span className="heatmap-text">Count Heatmap (1-mile)</span>
+                <div className={`toggle ${showCountHeatmap ? 'active' : ''}`}>
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+              {showCountHeatmap && (
+                <div className="heatmap-content">
+                  <label className="heatmap-label">Count</label>
+                  <div className="heatmap-gradient-container">
+                    <div className="heatmap-gradient">
+                      <div 
+                        className={`heatmap-range ${selectedCountRange === 'belowAverage' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'belowAverage' ? null : 'belowAverage');
+                        }}
+                        title="Debajo promedio"
+                        style={{ backgroundColor: '#FFC107' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedCountRange === 'average' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'average' ? null : 'average');
+                        }}
+                        title="Promedio (35 ventas)"
+                        style={{ backgroundColor: '#22c55e' }}
+                      ></div>
+                      <div 
+                        className={`heatmap-range ${selectedCountRange === 'aboveMean' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'aboveMean' ? null : 'aboveMean');
+                        }}
+                        title="Above mean"
+                        style={{ backgroundColor: '#4285F4' }}
+                      ></div>
+                    </div>
+                    <div className="heatmap-labels count-heatmap-labels">
+                      <span 
+                        className={`heatmap-label-price ${selectedCountRange === 'belowAverage' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'belowAverage' ? null : 'belowAverage');
+                        }}
+                        title="Debajo promedio"
+                      >Debajo promedio</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedCountRange === 'average' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'average' ? null : 'average');
+                        }}
+                        title="Promedio (35 ventas)"
+                      >Promedio (35)</span>
+                      <span 
+                        className={`heatmap-label-price ${selectedCountRange === 'aboveMean' ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCountRange(selectedCountRange === 'aboveMean' ? null : 'aboveMean');
+                        }}
+                        title="Above mean"
+                      >Above mean</span>
+                    </div>
+                    {!countHeatmapStats.hasData && (
+                      <span className="heatmap-no-data">No data</span>
+                    )}
+                    {countHeatmapStats.hasData && (
+                      <div className="heatmap-stats" style={{marginTop: '5px !important'}}>
+                        <span className="heatmap-stat-text">
+                          {countHeatmapStats.validGrids} grids • Avg: {countHeatmapStats.avgCount.toFixed(1)} sales
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Wetlands Card */}
+            <div className="wetlands-card">
+              <div className="wetlands-header" onClick={toggleWetlands}>
+                <div className="wetlands-icon-circle"></div>
+                <div className="wetlands-icon-pin">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="#ff69b4"/>
+                  </svg>
+                </div>
+                <span className="wetlands-text">Wetlands</span>
+                <div className={`toggle ${showWetlands ? 'active' : ''}`}>
+                  <div className="toggle-slider"></div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
         <div className="map-container">
           <MapboxMap 
+            ref={mapRef}
             onMarkerClick={handleMarkerClick}
             isRadiusMode={isRadiusMode}
             radiusValue={radiusValue}
             categoryData={getCategoryData}
             layers={layers}
             categories={categories}
+            pipelineData={pipelineData}
+            isPipelineActive={isPipelineActive}
+            priceHeatmapData={filteredHeatmapData}
+            showPriceHeatmap={showPriceHeatmap}
+            countHeatmapData={filteredCountHeatmapData}
+            showCountHeatmap={showCountHeatmap}
+            showWetlands={showWetlands}
+            onBoundsChange={setMapBounds}
           />
 
         {showDealModal && modalDeal && (
@@ -670,6 +1487,15 @@ const AppContent = () => {
             isOpen={showDealModal}
             onClose={handleCloseModal}
             loading={modalLoading}
+          />
+        )}
+        
+        {showGridModal && (
+          <GridSalesModal
+            gridData={gridData}
+            isOpen={showGridModal}
+            onClose={handleCloseGridModal}
+            loading={gridLoading}
           />
         )}
         </div>

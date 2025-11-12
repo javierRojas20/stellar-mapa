@@ -1,0 +1,84 @@
+#!/usr/bin/expect -f
+
+set timeout 60
+set server_ip "134.209.216.156"
+set server_pass "17&\\WW#qO53Z"
+
+# Subir index.html actualizado
+spawn scp -o StrictHostKeyChecking=no dist/index.html root@${server_ip}:/var/www/html/index.html
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+        exp_continue
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}
+
+wait
+
+# Subir favicon.svg si existe en dist
+if {[file exists "dist/favicon.svg"]} {
+    spawn scp -o StrictHostKeyChecking=no dist/favicon.svg root@${server_ip}:/var/www/html/favicon.svg
+    
+    expect {
+        "password:" {
+            send "${server_pass}\r"
+            exp_continue
+        }
+        "yes/no" {
+            send "yes\r"
+            exp_continue
+        }
+        eof
+    }
+    
+    wait
+}
+
+# Si no está en dist, subir desde public
+if {![file exists "dist/favicon.svg"]} {
+    spawn scp -o StrictHostKeyChecking=no public/favicon.svg root@${server_ip}:/var/www/html/favicon.svg
+    
+    expect {
+        "password:" {
+            send "${server_pass}\r"
+            exp_continue
+        }
+        "yes/no" {
+            send "yes\r"
+            exp_continue
+        }
+        eof
+    }
+    
+    wait
+}
+
+# Verificar y ajustar permisos
+spawn ssh -o StrictHostKeyChecking=no root@${server_ip}
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+}
+
+expect "# "
+
+send "chown www-data:www-data /var/www/html/favicon.svg 2>/dev/null; echo 'Favicon permissions updated'\r"
+expect "# "
+send "ls -lh /var/www/html/favicon.svg\r"
+expect "# "
+
+send "exit\r"
+expect eof
+

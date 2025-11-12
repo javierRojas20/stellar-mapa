@@ -136,3 +136,4 @@ const HospitalDetailsModal = ({ hospital, isOpen, onClose, loading = false }) =>
 };
 
 export default HospitalDetailsModal;
+

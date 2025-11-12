@@ -1,0 +1,40 @@
+#!/usr/bin/expect -f
+
+set timeout 60
+set server_ip "134.209.216.156"
+set server_user "root"
+set server_pass "17&\\WW#qO53Z"
+
+spawn ssh -o StrictHostKeyChecking=no root@${server_ip}
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+}
+
+expect "# "
+
+# Verificar el error de Nginx
+send "systemctl status nginx --no-pager -l | head -20\r"
+expect "# "
+
+# Verificar logs de error
+send "journalctl -xeu nginx.service --no-pager | tail -30\r"
+expect "# "
+
+# Verificar configuración
+send "nginx -t\r"
+expect "# "
+
+# Ver qué archivos de configuración hay
+send "ls -la /etc/nginx/sites-enabled/\r"
+expect "# "
+
+send "exit\r"
+expect eof
+

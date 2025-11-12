@@ -209,6 +209,86 @@ body {
   color: #9ca3af;
 }
 
+/* Estilos para el autocompletado de búsqueda */
+.search-loading {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.search-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.search-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin-top: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 1000;
+}
+
+.search-suggestion-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  transition: background-color 0.2s ease;
+}
+
+.search-suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.search-suggestion-item:hover {
+  background-color: #f9fafb;
+}
+
+.suggestion-icon {
+  font-size: 18px;
+  margin-right: 12px;
+  color: #6b7280;
+}
+
+.suggestion-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestion-primary {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2937;
+  margin-bottom: 2px;
+}
+
+.suggestion-secondary {
+  font-size: 12px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -269,17 +349,77 @@ body {
     position: relative;
   }
 
+  /* User Profile Header */
+  .user-profile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 12px 4px 4px;
+    border-radius: 24px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .user-profile-header:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+  }
+
+  .user-profile-header .menu-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .user-profile-header .menu-btn:hover {
+    background: #2563eb;
+    transform: scale(1.05);
+  }
+
+  .user-info-header {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .user-profile-header .user-email {
+    font-size: 13px;
+    font-weight: 500;
+    color: #1f2937;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+    line-height: 1.4;
+  }
+
   .dropdown-menu {
     position: absolute;
-    top: 100%;
+    top: calc(100% + 8px);
     right: 0;
     background: white;
     border: 1px solid #e1e5e9;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    min-width: 180px;
+    min-width: 200px;
     z-index: 1000;
     margin-top: 4px;
+    overflow: hidden;
   }
 
   .dropdown-item {
@@ -1142,7 +1282,7 @@ body {
   background: white;
   border: 1px solid #e1e5e9;
   border-radius: 8px;
-  margin: 16px;
+  margin-bottom: 16px;
   padding: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -1168,6 +1308,225 @@ body {
   font-size: 12px;
   color: #6b7280;
   margin: 8px 0 0 0;
+}
+
+/* Price Heatmap Card */
+.heatmap-card {
+  margin-bottom: 20px;
+  background: white;
+  border: 1px solid #e1e5e9;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Wetlands Card */
+.wetlands-card {
+  margin-bottom: 20px;
+  background: white;
+  border: 1px solid #e1e5e9;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.wetlands-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.wetlands-icon-circle {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #87ceeb;
+  flex-shrink: 0;
+}
+
+.wetlands-icon-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.wetlands-icon-pin svg {
+  width: 100%;
+  height: 100%;
+}
+
+.wetlands-text {
+  flex: 1;
+  font-weight: 600;
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.heatmap-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.heatmap-icon-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  flex-shrink: 0;
+}
+
+.heatmap-icon-graph {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.heatmap-text {
+  flex: 1;
+  font-weight: 600;
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.heatmap-content {
+  margin-top: 16px;
+}
+
+.heatmap-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 12px;
+  padding-left: 0;
+}
+
+.heatmap-gradient-container {
+  position: relative;
+  margin-top: 0;
+}
+
+.heatmap-gradient {
+  width: 100%;
+  height: 24px;
+  border-radius: 12px;
+  background: linear-gradient(to right, 
+    #E53935 0%,      /* Red - Under $200K */
+    #E53935 16.66%,  /* Red */
+    #FFC107 16.66%,  /* Yellow - $200K - $350K */
+    #FFC107 33.33%,  /* Yellow */
+    #FB8C00 33.33%,  /* Orange - $350K - $400K */
+    #FB8C00 50%,     /* Orange */
+    #7E57C2 50%,     /* Purple - $400K - $600K */
+    #7E57C2 66.66%,  /* Purple */
+    #4285F4 66.66%,  /* Blue - $600K - $700K */
+    #4285F4 83.33%,  /* Blue */
+    #9E9E9E 83.33%,  /* Gray - $700K+ */
+    #9E9E9E 100%     /* Gray */
+  );
+  margin-bottom: 12px;
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  overflow: hidden;
+}
+
+.heatmap-range {
+  flex: 1;
+  height: 100%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.heatmap-range:hover {
+  opacity: 0.8;
+  transform: scaleY(1.1);
+}
+
+.heatmap-range.active {
+  box-shadow: inset 0 0 0 2px #ffffff;
+  opacity: 1;
+  transform: scaleY(1.15);
+  z-index: 1;
+}
+
+.heatmap-labels {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: 8px;
+  position: relative;
+  padding-bottom: 25px;
+  width: 100%;
+}
+
+/* Count Heatmap specific labels - 3 columns */
+.count-heatmap-labels {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+.heatmap-label-price {
+  font-size: 8px;
+  color: #4b5563;
+  font-weight: 500;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 1px;
+  border-radius: 3px;
+  white-space: nowrap;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.heatmap-label-price:hover {
+  background-color: #f3f4f6;
+  color: #1f2937;
+}
+
+.heatmap-label-price.active {
+  color: #16a34a;
+  font-weight: 700;
+  background-color: #dcfce7;
+}
+
+.heatmap-label-price:first-child {
+  text-align: left;
+}
+
+.heatmap-label-price:last-child {
+  text-align: right;
+}
+
+.heatmap-no-data {
+  position: absolute;
+  left: 0;
+  top: 20px;
+  font-size: 11px;
+  color: #9ca3af;
+  font-style: italic;
+  margin-left: 2px;
+}
+
+.heatmap-stats {
+  position: absolute;
+  left: 0;
+  top: 45px;
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.heatmap-stat-text {
+  color: #16a34a;
+  font-weight: 600;
 }
 
 /* Custom scrollbar for sidebar */

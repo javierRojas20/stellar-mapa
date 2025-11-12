@@ -1,0 +1,63 @@
+#!/usr/bin/expect -f
+
+# Script para conectarse automáticamente y configurar el servidor con SSL
+# Ejecutar: expect auto-setup-ssl.exp
+
+set timeout 300
+set server_ip "134.209.216.156"
+set server_user "root"
+set server_pass "17&\\WW#qO53Z"
+set domain "map.livestellar.com"
+
+# Subir el script de configuración primero
+spawn scp -o StrictHostKeyChecking=no setup-server-ssl.sh root@${server_ip}:/tmp/setup-server-ssl.sh
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+        exp_continue
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}
+
+# Esperar a que termine scp
+wait
+
+# Conectarse y ejecutar el script
+spawn ssh -o StrictHostKeyChecking=no root@${server_ip}
+
+expect {
+    "password:" {
+        send "${server_pass}\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+}
+
+expect "# "
+
+# Ejecutar el script de configuración
+send "chmod +x /tmp/setup-server-ssl.sh\r"
+expect "# "
+send "/tmp/setup-server-ssl.sh\r"
+
+# Esperar a que termine (puede tomar varios minutos)
+expect {
+    "=== Configuración completada ===" {
+        puts "\n✓ Configuración exitosa!"
+    }
+    timeout {
+        puts "\n⚠ La configuración puede estar en proceso..."
+    }
+}
+
+expect "# "
+send "exit\r"
+expect eof
+
