@@ -48,3 +48,8 @@ dist-ssr
 
 config.bat
 !.env.example
+
+# Environment variables
+.env
+.env.*
+!.env.sample
